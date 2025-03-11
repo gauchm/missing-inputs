@@ -1,0 +1,13 @@
+diff --git a/neuralhydrology/datasetzoo/basedataset.py b/neuralhydrology/datasetzoo/basedataset.py
+--- a/neuralhydrology/datasetzoo/basedataset.py
++++ b/neuralhydrology/datasetzoo/basedataset.py
+@@ -178,7 +179,7 @@ class BaseDataset(Dataset):
+                 if not self.cfg.hindcast_inputs_flattened:
+                     sample[x_d_key][k] = v[hindcast_start_idx:global_end_idx]
+ 
+-            if self.is_train and (self.cfg.nan_step_probability or self.cfg.nan_sequence_probability):
++            if self.cfg.nan_step_probability or self.cfg.nan_sequence_probability:
+                 if self.cfg.hindcast_inputs_flattened:
+                     sample[f'{x_d_key}_hindcast'] = self._add_nan_streaks(sample[f'{x_d_key}_hindcast'],
+                                                                           groups=self.cfg.hindcast_inputs)
+

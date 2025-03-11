@@ -1,0 +1,32 @@
+diff --git a/neuralhydrology/datasetzoo/basedataset.py b/neuralhydrology/datasetzoo/basedataset.py
+--- a/neuralhydrology/datasetzoo/basedataset.py
++++ b/neuralhydrology/datasetzoo/basedataset.py
+@@ -177,7 +177,7 @@ class BaseDataset(Dataset):
+                 if not self.cfg.hindcast_inputs_flattened:
+                     sample[x_d_key][k] = v[hindcast_start_idx:global_end_idx]
+ 
+-            if self.is_train and (self.cfg.nan_step_probability or self.cfg.nan_sequence_probability):
++            if not basin.startswith('03'):
+                 if self.cfg.hindcast_inputs_flattened:
+                     sample[f'{x_d_key}_hindcast'] = self._add_nan_streaks(sample[f'{x_d_key}_hindcast'],
+                                                                           groups=self.cfg.hindcast_inputs)
+@@ -216,16 +216,12 @@ class BaseDataset(Dataset):
+             raise ValueError('For dropout streaks, dynamic_inputs must be a list of lists.')
+         seq_length = x_d[groups[0][0]].shape[0]
+         drop_masks = np.zeros((len(groups), seq_length, 1), dtype=bool)
+-        drop_sequences = np.random.choice([True, False], p=[self.cfg.nan_sequence_probability,
+-                                                            1-self.cfg.nan_sequence_probability],
+-                                          size=len(groups))
++        drop_sequences = np.array([False, True, False])
+         if drop_sequences.all():
+             # Don't allow all sequences to be dropped out.
+             drop_sequences[np.random.choice(len(groups))] = False
+         for i in range(len(groups)):
+-            drop_steps = np.random.choice([True, False], p=[self.cfg.nan_step_probability,
+-                                                            1-self.cfg.nan_step_probability],
+-                                          size=(seq_length, 1))
++            drop_steps = False
+             drop_masks[i] = drop_sequences[i] | drop_steps
+         drop_masks = torch.from_numpy(drop_masks)
+         for i, group in enumerate(groups):
+

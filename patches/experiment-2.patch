@@ -1,0 +1,145 @@
+diff --git a/neuralhydrology/datasetzoo/basedataset.py b/neuralhydrology/datasetzoo/basedataset.py
+--- a/neuralhydrology/datasetzoo/basedataset.py
++++ b/neuralhydrology/datasetzoo/basedataset.py
+@@ -69,6 +69,7 @@ class BaseDataset(Dataset):
+         super(BaseDataset, self).__init__()
+         self.cfg = cfg
+         self.is_train = is_train
++        self.keep_forcing = None
+ 
+         if period not in ["train", "validation", "test"]:
+             raise ValueError("'period' must be one of 'train', 'validation' or 'test' ")
+@@ -178,7 +179,7 @@ class BaseDataset(Dataset):
+                 if not self.cfg.hindcast_inputs_flattened:
+                     sample[x_d_key][k] = v[hindcast_start_idx:global_end_idx]
+ 
+-            if self.is_train and (self.cfg.nan_step_probability or self.cfg.nan_sequence_probability):
++            if self.cfg.nan_step_probability or self.cfg.nan_sequence_probability or self.keep_forcing is not None:
+                 if self.cfg.hindcast_inputs_flattened:
+                     sample[f'{x_d_key}_hindcast'] = self._add_nan_streaks(sample[f'{x_d_key}_hindcast'],
+                                                                           groups=self.cfg.hindcast_inputs)
+@@ -216,16 +217,24 @@ class BaseDataset(Dataset):
+             raise ValueError('For dropout streaks, dynamic_inputs must be a list of lists.')
+         seq_length = x_d[groups[0][0]].shape[0]
+         drop_masks = np.zeros((len(groups), seq_length, 1), dtype=bool)
+-        drop_sequences = np.random.choice([True, False], p=[self.cfg.nan_sequence_probability,
+-                                                            1-self.cfg.nan_sequence_probability],
+-                                          size=len(groups))
++        if self.keep_forcing is None:
++            drop_sequences = np.random.choice([True, False], p=[self.cfg.nan_sequence_probability,
++                                                                1-self.cfg.nan_sequence_probability],
++                                              size=len(groups))
++        else:
++            drop_sequences = np.array([True, True, True])
++            for kk in self.keep_forcing:
++                drop_sequences[kk] = False
+         if drop_sequences.all():
+             # Don't allow all sequences to be dropped out.
+             drop_sequences[np.random.choice(len(groups))] = False
+         for i in range(len(groups)):
+-            drop_steps = np.random.choice([True, False], p=[self.cfg.nan_step_probability,
+-                                                            1-self.cfg.nan_step_probability],
+-                                          size=(seq_length, 1))
++            if self.keep_forcing is None:
++                drop_steps = np.random.choice([True, False], p=[self.cfg.nan_step_probability,
++                                                                1-self.cfg.nan_step_probability],
++                                              size=(seq_length, 1))
++            else:
++                drop_steps = False
+             drop_masks[i] = drop_sequences[i] | drop_steps
+         drop_masks = torch.from_numpy(drop_masks)
+         for i, group in enumerate(groups):
+diff --git a/neuralhydrology/evaluation/evaluate.py b/neuralhydrology/evaluation/evaluate.py
+--- a/neuralhydrology/evaluation/evaluate.py
++++ b/neuralhydrology/evaluation/evaluate.py
+@@ -21,3 +21,9 @@ def start_evaluation(cfg: Config, run_di
+     """
+     tester = get_tester(cfg=cfg, run_dir=run_dir, period=period, init_model=True)
+     tester.evaluate(epoch=epoch, save_results=True, save_all_output=cfg.save_all_output, metrics=cfg.metrics)
++    tester.evaluate(epoch=epoch, save_results=True, save_all_output=cfg.save_all_output, metrics=cfg.metrics, keep_forcing=[0])
++    tester.evaluate(epoch=epoch, save_results=True, save_all_output=cfg.save_all_output, metrics=cfg.metrics, keep_forcing=[1])
++    tester.evaluate(epoch=epoch, save_results=True, save_all_output=cfg.save_all_output, metrics=cfg.metrics, keep_forcing=[2])
++    tester.evaluate(epoch=epoch, save_results=True, save_all_output=cfg.save_all_output, metrics=cfg.metrics, keep_forcing=[0, 1])
++    tester.evaluate(epoch=epoch, save_results=True, save_all_output=cfg.save_all_output, metrics=cfg.metrics, keep_forcing=[0, 2])
++    tester.evaluate(epoch=epoch, save_results=True, save_all_output=cfg.save_all_output, metrics=cfg.metrics, keep_forcing=[1, 2])
+diff --git a/neuralhydrology/evaluation/tester.py b/neuralhydrology/evaluation/tester.py
+--- a/neuralhydrology/evaluation/tester.py
++++ b/neuralhydrology/evaluation/tester.py
+@@ -148,7 +148,8 @@ class BaseTester(object):
+                  save_all_output: bool = False,
+                  metrics: Union[list, dict] = [],
+                  model: torch.nn.Module = None,
+-                 experiment_logger: Logger = None) -> dict:
++                 experiment_logger: Logger = None,
++                 keep_forcing: list[int] | None = None) -> dict:
+         """Evaluate the model.
+         
+         Parameters
+@@ -210,6 +211,9 @@ class BaseTester(object):
+                 if self.cfg.cache_validation_data and self.period == "validation":
+                     self.cached_datasets[basin] = ds
+ 
++            if keep_forcing is not None:
++                ds.keep_forcing = keep_forcing
++
+             loader = DataLoader(ds, batch_size=self.cfg.batch_size, num_workers=0, collate_fn=ds.collate_fn)
+ 
+             y_hat, y, dates, all_losses, all_output[basin] = self._evaluate(model, loader, ds.frequencies,
+@@ -328,6 +332,7 @@ class BaseTester(object):
+                                 experiment_logger.log_step(**values)
+                             for k, v in values.items():
+                                 results[basin][freq][k] = v
++            ds.keep_forcing = None
+ 
+         # convert default dict back to normal Python dict to avoid unexpected behavior when trying to access
+         # a non-existing basin
+@@ -345,7 +350,8 @@ class BaseTester(object):
+         if save_all_output:
+             states_to_save = all_output
+         if save_results or save_all_output:
+-            self._save_results(results=results_to_save, states=states_to_save, epoch=epoch)
++            self._save_results(results=results_to_save, states=states_to_save, epoch=epoch,
++                               keep_forcing=keep_forcing)
+ 
+         return results
+ 
+@@ -369,7 +375,8 @@ class BaseTester(object):
+                 # make sure the preamble is a valid file name
+                 experiment_logger.log_figures(figures, freq, preamble=re.sub(r"[^A-Za-z0-9\._\-]+", "", target_var))
+ 
+-    def _save_results(self, results: Optional[dict], states: Optional[dict] = None, epoch: int = None):
++    def _save_results(self, results: Optional[dict], states: Optional[dict] = None, epoch: int = None,
++                      keep_forcing: Optional[list[int]] = None):
+         """Store results in various formats to disk.
+         
+         Developer note: We cannot store the time series data (the xarray objects) as netCDF file but have to use
+@@ -382,6 +389,12 @@ class BaseTester(object):
+         # make sure the parent directory exists
+         parent_directory = self.run_dir / self.period / weight_file.stem
+         parent_directory.mkdir(parents=True, exist_ok=True)
++        forcing_names = {0: "daymet", 1: "nldas", 2: "maurer"}
++        if keep_forcing is not None:
++            keep_name = '_'.join(sorted(forcing_names[kk] for kk in keep_forcing))
++            suffix = f"_keep{keep_name}"
++        else:
++            suffix = ""
+ 
+         # save metrics any time this function is called, as long as they exist
+         if self.cfg.metrics and results is not None:
+@@ -402,13 +415,13 @@ class BaseTester(object):
+             if "all" in metrics_list:
+                 metrics_list = get_available_metrics()
+             df = metrics_to_dataframe(results, metrics_list, self.cfg.target_variables)
+-            metrics_file = parent_directory / f"{self.period}_metrics.csv"
++            metrics_file = parent_directory / f"{self.period}{suffix}_metrics.csv"
+             df.to_csv(metrics_file)
+             LOGGER.info(f"Stored metrics at {metrics_file}")
+ 
+         # store all results packed as pickle file
+         if results is not None:
+-            result_file = parent_directory / f"{self.period}_results.p"
++            result_file = parent_directory / f"{self.period}{suffix}_results.p"
+             with result_file.open("wb") as fp:
+                 pickle.dump(results, fp)
+             LOGGER.info(f"Stored results at {result_file}")
+

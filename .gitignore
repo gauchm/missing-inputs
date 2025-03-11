@@ -1,0 +1,12 @@
+**/*.pyc
+.vscode/*
+.idea/*
+.ipynb_checkpoints/*
+
+results/baselines/
+results/camels.geojson
+results/drop-sequences/
+results/nansweep_step_lr25_v2/
+results/regional/
+results/us_shp/
+
